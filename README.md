@@ -81,7 +81,7 @@ Install the project together with the test tooling:
 uv sync --group test
 ```
 
-The repository includes a `.python-version` file targeting Python 3.12, which is the interpreter used for the `uv` workflow here.
+The repository includes a `.python-version` file targeting Python 3.13, which is the interpreter used for the `uv` workflow here.
 
 Run the test suite with either `pytest` or the existing `unittest` discovery:
 

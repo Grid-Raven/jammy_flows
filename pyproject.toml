@@ -44,11 +44,9 @@ Repository = "https://github.com/thoglu/jammy_flows"
 Issues = "https://github.com/thoglu/jammy_flows/issues"
 
 [dependency-groups]
-test = [
+dev = [
     "pytest>=6.2",
-    # Continuous-flow tests exercise the optional torchdiffeq dependency.
     "torchdiffeq>=0.2.1",
-    # Linting in the build workflow (uv run flake8).
     "flake8>=6",
 ]
 docs = [

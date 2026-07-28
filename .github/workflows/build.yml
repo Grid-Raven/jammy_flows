@@ -21,7 +21,7 @@ jobs:
       with:
         python-version: "3.13"
     - name: Install dependencies
-      run: uv sync --group test
+      run: uv sync --dev
     - name: Lint with flake8
       run: |
         # stop the build if there are Python syntax errors or undefined names

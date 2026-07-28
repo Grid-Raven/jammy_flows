@@ -177,8 +177,9 @@ def rational_quadratic_spline(inputs,
             derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * root.pow(2)
                                                          + 2 * input_delta * theta_one_minus_theta
                                                          + input_derivatives * (1 - root).pow(2))
-            # Protect log from near-zero values at fp32 precision.
-            logabsdet = torch.log(derivative_numerator.clamp(min=1e-8)) - 2 * torch.log(denominator.clamp(min=1e-8))
+            # Floor at min dtype normal
+            log_floor = torch.finfo(derivative_numerator.dtype).tiny
+            logabsdet = torch.log(derivative_numerator.clamp(min=log_floor)) - 2 * torch.log(denominator.clamp(min=log_floor))
 
             return outputs, -logabsdet
         else:
@@ -194,7 +195,8 @@ def rational_quadratic_spline(inputs,
             derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * theta.pow(2)
                                                          + 2 * input_delta * theta_one_minus_theta
                                                          + input_derivatives * (1 - theta).pow(2))
-            logabsdet = torch.log(derivative_numerator.clamp(min=1e-8)) - 2 * torch.log(denominator.clamp(min=1e-8))
+            log_floor = torch.finfo(derivative_numerator.dtype).tiny
+            logabsdet = torch.log(derivative_numerator.clamp(min=log_floor)) - 2 * torch.log(denominator.clamp(min=log_floor))
 
             return outputs, logabsdet
 
@@ -342,25 +344,19 @@ def rational_quadratic_spline_with_linear_extension(inputs,
 
             return outputs, final_logabsdet
         else:
-            theta = (inputs - input_cumwidths) / input_bin_widths
+            # clamp to avoid inf/NaN grads, avoids needing clamp for denom later
+            theta = ((inputs - input_cumwidths) / input_bin_widths).clamp(0.0, 1.0)
             theta_one_minus_theta = theta * (1 - theta)
 
             numerator = input_heights * (input_delta * theta.pow(2)
                                          + input_derivatives * theta_one_minus_theta)
             denominator = input_delta + ((input_derivatives + input_derivatives_plus_one - 2 * input_delta)
                                          * theta_one_minus_theta)
-            # Safe denominator: for inputs in the linear tail (inputs<=left / >=right) the
-            # torch.where below overwrites outputs/logabsdet, but autograd still backprops
-            # through this RQ branch evaluated at extrapolated theta, where denominator and
-            # derivative_numerator can be <=0 -> inf/NaN in the dead branch -> NaN gradient.
-            # clamp_min keeps the dead branch finite; in-range rows are >> 1e-8 so unaffected.
-            denominator = denominator.clamp_min(1e-8)
             outputs = input_cumheights + numerator / denominator
 
             derivative_numerator = input_delta.pow(2) * (input_derivatives_plus_one * theta.pow(2)
                                                          + 2 * input_delta * theta_one_minus_theta
                                                          + input_derivatives * (1 - theta).pow(2))
-            derivative_numerator = derivative_numerator.clamp_min(1e-8)
             logabsdet = torch.log(derivative_numerator) - 2 * torch.log(denominator)
 
             ## fill in linear bits

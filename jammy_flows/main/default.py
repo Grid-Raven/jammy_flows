@@ -1178,12 +1178,15 @@ class pdf(nn.Module):
 
         else:
 
+            # local generator: seeding must not perturb the caller's global RNG stream
+            generator = None
             if(seed is not None):
-                torch.manual_seed(seed)
+                generator = torch.Generator(device=used_device)
+                generator.manual_seed(seed)
 
             std_normal_samples = torch.randn(
                 used_sample_size, self.total_base_dim,
-                dtype=data_type, device=used_device,
+                dtype=data_type, device=used_device, generator=generator,
             )
             log_gauss_evals = torch.distributions.MultivariateNormal(
                 torch.zeros(self.total_base_dim).type(data_type).to(used_device),
@@ -1627,12 +1630,15 @@ class pdf(nn.Module):
 
         else:
 
+            # local generator: seeding must not perturb the caller's global RNG stream
+            generator = None
             if(seed is not None):
-                torch.manual_seed(seed)
+                generator = torch.Generator(device=used_device)
+                generator.manual_seed(seed)
 
             std_normal_samples = torch.randn(
                 used_sample_size, self.total_base_dim,
-                dtype=data_type, device=used_device,
+                dtype=data_type, device=used_device, generator=generator,
             )
 
             log_gauss_evals=torch.distributions.Normal(0.0,1.0).log_prob(std_normal_samples).sum(dim=-1)

@@ -17,15 +17,24 @@ dependencies = [
     "numpy>=1.18.5",
     "scipy>=1.5.4",
     "torch>=1.7",
-    "torchdiffeq>=0.2.1",
 ]
+
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+]
+
+[project.optional-dependencies]
+# Continuous normalizing flows (CNF) on spheres require torchdiffeq. It is
+# optional at runtime and only imported lazily inside jammy_flows, so it must
+# not be a hard dependency for plain installs.
+continuous = [
+    "torchdiffeq>=0.2.1",
 ]
 
 [project.urls]
@@ -37,6 +46,10 @@ Issues = "https://github.com/thoglu/jammy_flows/issues"
 [dependency-groups]
 test = [
     "pytest>=6.2",
+    # Continuous-flow tests exercise the optional torchdiffeq dependency.
+    "torchdiffeq>=0.2.1",
+    # Linting in the build workflow (uv run flake8).
+    "flake8>=6",
 ]
 docs = [
     "sphinx>=4",

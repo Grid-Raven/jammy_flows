@@ -4,6 +4,7 @@ from torch import nn
 from ..flow_options import check_flow_option, obtain_default_options, obtain_overall_flow_info
 from ..extra_functions import list_from_str, NONLINEARITIES, recheck_sampling, find_init_pars_of_chained_blocks
 from ..amortizable_mlp import AmortizableMLP
+from ..rng_fns import draw_standard_normal
 from ..helper_fns import contours, grid_functions
 from ..helper_fns.coverage import calculate_approximate_coverage
 from ..helper_fns.plotting.spherical import get_multiresolution_evals
@@ -1150,15 +1151,9 @@ class pdf(nn.Module):
 
         else:
 
-            # local generator: seeding must not perturb the caller's global RNG stream
-            generator = None
-            if(seed is not None):
-                generator = torch.Generator(device=used_device)
-                generator.manual_seed(seed)
-
-            std_normal_samples = torch.randn(
+            std_normal_samples = draw_standard_normal(
                 used_sample_size, self.total_base_dim,
-                dtype=data_type, device=used_device, generator=generator,
+                data_type, used_device, seed=seed,
             )
             log_gauss_evals = torch.distributions.MultivariateNormal(
                 torch.zeros(self.total_base_dim).type(data_type).to(used_device),
@@ -1586,15 +1581,9 @@ class pdf(nn.Module):
 
         else:
 
-            # local generator: seeding must not perturb the caller's global RNG stream
-            generator = None
-            if(seed is not None):
-                generator = torch.Generator(device=used_device)
-                generator.manual_seed(seed)
-
-            std_normal_samples = torch.randn(
+            std_normal_samples = draw_standard_normal(
                 used_sample_size, self.total_base_dim,
-                dtype=data_type, device=used_device, generator=generator,
+                data_type, used_device, seed=seed,
             )
 
             log_gauss_evals=torch.distributions.Normal(0.0,1.0).log_prob(std_normal_samples).sum(dim=-1)

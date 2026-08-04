@@ -64,6 +64,7 @@ def _inverse_bisection_newton(
             torch.ones_like(derivative),
         )
         newton_candidate = current - safe_residual / safe_derivative
+        newton_step = torch.abs(newton_candidate - current)
 
         valid_candidate = (
             finite_residual
@@ -71,6 +72,7 @@ def _inverse_bisection_newton(
             & torch.isfinite(newton_candidate)
             & (newton_candidate >= lower)
             & (newton_candidate <= upper)
+            & (newton_step > effective_tolerance)
         )
         candidate = torch.where(
             valid_candidate,

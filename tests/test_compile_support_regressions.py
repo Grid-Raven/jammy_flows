@@ -8,7 +8,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import jammy_flows.main.default as f
 from jammy_flows.layers import bisection_n_newton
-from jammy_flows.layers.spline_fns import rational_quadratic_spline
+from jammy_flows.layers.spline_fns import (
+    rational_quadratic_spline,
+    rational_quadratic_spline_with_linear_extension,
+)
 from jammy_flows.rng_fns import draw_standard_normal
 
 
@@ -88,9 +91,78 @@ def test_rational_quadratic_spline_forward_inverse_logdet_cancel_for_interior_po
     )
 
 
-def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints():
+def test_linear_extension_tail_values_and_gradients_are_finite():
+    dtype = torch.float32
+    inputs = torch.tensor(
+        [[[-100.0]], [[0.5]], [[100.0]]],
+        dtype=dtype,
+        requires_grad=True,
+    )
+    unnormalized_widths = torch.tensor([[[0.3, -0.8, 1.1, 0.2]]], dtype=dtype)
+    unnormalized_heights = torch.tensor([[[-0.6, 0.7, 0.1, 0.9]]], dtype=dtype)
+    unnormalized_derivatives = torch.tensor(
+        [[[0.2, -0.3, 0.8, -0.1, 0.5]]],
+        dtype=dtype,
+    )
+    left = torch.tensor([[[0.0]]], dtype=dtype)
+    right = torch.tensor([[[1.0]]], dtype=dtype)
+    bottom = torch.tensor([[[0.0]]], dtype=dtype)
+    top = torch.tensor([[[1.0]]], dtype=dtype)
+
+    outputs, forward_logdet = rational_quadratic_spline_with_linear_extension(
+        inputs,
+        unnormalized_widths,
+        unnormalized_heights,
+        unnormalized_derivatives,
+        inverse=False,
+        left=left,
+        right=right,
+        bottom=bottom,
+        top=top,
+    )
+    (outputs.sum() + forward_logdet.sum()).backward()
+
+    assert torch.isfinite(outputs).all()
+    assert torch.isfinite(forward_logdet).all()
+    assert torch.isfinite(inputs.grad).all()
+
+    inverse_inputs = outputs.detach().requires_grad_(True)
+    recovered, inverse_logdet = rational_quadratic_spline_with_linear_extension(
+        inverse_inputs,
+        unnormalized_widths,
+        unnormalized_heights,
+        unnormalized_derivatives,
+        inverse=True,
+        left=left,
+        right=right,
+        bottom=bottom,
+        top=top,
+    )
+    (recovered.sum() + inverse_logdet.sum()).backward()
+
+    assert torch.isfinite(recovered).all()
+    assert torch.isfinite(inverse_logdet).all()
+    assert torch.isfinite(inverse_inputs.grad).all()
+    torch.testing.assert_close(recovered, inputs.detach(), rtol=2e-4, atol=2e-4)
+    torch.testing.assert_close(
+        forward_logdet.detach() + inverse_logdet.detach(),
+        torch.zeros_like(forward_logdet),
+        rtol=2e-4,
+        atol=2e-4,
+    )
+
+
+@pytest.mark.parametrize(
+    "dtype, atol",
+    [
+        (torch.float64, 1e-10),
+        (torch.float32, 1e-6),
+        (torch.float16, 2e-3),
+    ],
+)
+def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints(dtype, atol):
     flow = f.pdf("s1", "y")
-    flow.double()
+    flow.to(dtype=dtype)
 
     embedding_points = torch.tensor(
         [
@@ -99,7 +171,7 @@ def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints():
             [-1.0, 0.0],
             [0.0, -1.0],
         ],
-        dtype=torch.float64,
+        dtype=dtype,
     )
 
     intrinsic, _ = flow.transform_target_space(
@@ -113,7 +185,7 @@ def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints():
         transform_to="embedding",
     )
 
-    torch.testing.assert_close(roundtrip, embedding_points, rtol=1e-10, atol=1e-10)
+    torch.testing.assert_close(roundtrip, embedding_points, rtol=0.0, atol=atol)
 
 
 def test_seeded_sampling_does_not_mutate_global_torch_rng_state():

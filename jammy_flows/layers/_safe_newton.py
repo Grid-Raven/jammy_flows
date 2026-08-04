@@ -169,3 +169,106 @@ def inverse_bisection_n_newton_joint_func_and_grad(
         active_row = active_row & still_active
 
     return prev
+
+
+def inverse_bisection_n_newton_bracketed(
+        func,
+        grad_func,
+        target_arg,
+        *args,
+        min_boundary=-100000.0,
+        max_boundary=100000.0,
+        num_bisection_iter=25,
+        num_newton_iter=30,
+        newton_tolerance=1e-14,
+        verbose=0):
+    """Invert a monotonic function with bracket-preserving Newton iterations.
+
+    This variant is intended for numerically sensitive spherical transforms.
+    It keeps every iterate inside the bisection bracket and falls back to its
+    midpoint whenever a Newton proposal is non-finite or does not reduce the
+    residual. Shapes remain fixed, which also avoids data-dependent indexing.
+    """
+    del verbose
+
+    lower, upper, _ = _legacy_bisection_bracket(
+        func,
+        target_arg,
+        args,
+        min_boundary,
+        max_boundary,
+        num_bisection_iter,
+    )
+    prev = (lower + upper) / 2.0
+    active = torch.ones_like(target_arg, dtype=torch.bool)
+
+    residual_tolerance = 1e-10 if target_arg.dtype == torch.float64 else 1e-5
+    step_tolerance = max(
+        float(newton_tolerance),
+        10.0 * float(torch.finfo(target_arg.dtype).eps),
+    )
+
+    for _ in range(num_newton_iter):
+        fn_result = func(prev, *args)
+        derivative = grad_func(prev, *args)
+        residual = fn_result - target_arg
+
+        finite_value = active & torch.isfinite(fn_result)
+        move_lower = fn_result < target_arg
+        lower = torch.where(finite_value & move_lower, prev, lower)
+        upper = torch.where(finite_value & ~move_lower, prev, upper)
+        midpoint = (lower + upper) / 2.0
+
+        valid_derivative = (
+            active
+            & torch.isfinite(derivative)
+            & (derivative != 0)
+        )
+        safe_residual = torch.where(
+            active & torch.isfinite(residual),
+            residual,
+            torch.zeros_like(residual),
+        )
+        safe_derivative = torch.where(
+            valid_derivative,
+            derivative,
+            torch.ones_like(derivative),
+        )
+        newton_candidate = prev - safe_residual / safe_derivative
+
+        valid_candidate = (
+            valid_derivative
+            & torch.isfinite(newton_candidate)
+            & (newton_candidate >= lower)
+            & (newton_candidate <= upper)
+        )
+        candidate_to_check = torch.where(
+            valid_candidate,
+            newton_candidate,
+            midpoint,
+        )
+        checked_residual = func(candidate_to_check, *args) - target_arg
+        improves = (
+            torch.isfinite(checked_residual)
+            & (torch.abs(checked_residual) < torch.abs(residual))
+        )
+        accept_newton = valid_candidate & improves
+        candidate = torch.where(accept_newton, newton_candidate, midpoint)
+
+        candidate_residual = func(candidate, *args) - target_arg
+        step = torch.abs(candidate - prev)
+        converged = (
+            torch.isfinite(candidate_residual)
+            & (
+                (torch.abs(candidate_residual) <= residual_tolerance)
+                | (
+                    (step <= step_tolerance)
+                    & (torch.abs(candidate_residual) <= 10.0 * residual_tolerance)
+                )
+            )
+        )
+
+        prev = torch.where(active, candidate, prev)
+        active = active & ~converged
+
+    return prev

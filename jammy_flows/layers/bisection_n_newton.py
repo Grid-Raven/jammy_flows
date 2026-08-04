@@ -19,7 +19,7 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
                                                    newton_tolerance=1e-14, 
                                                    verbose=0):
     """
-    Performs bisection and Newton iterations simulataneously in each 1-d subdimension in a given batch.
+    Performs bisection and Newton iterations simulataneously in each 1-d subdimension in each batch.
 
     Parameters:
 
@@ -38,40 +38,58 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
             The inverse of the function *func* in each sub-dimension in each batch item.
 
     """
-    new_upper = torch.full_like(target_arg, max_boundary)
-    new_lower = torch.full_like(target_arg, min_boundary)
+    lower = torch.full_like(target_arg, min_boundary)
+    upper = torch.full_like(target_arg, max_boundary)
 
-    mid = (new_upper + new_lower) / 2.
-    for i in range(num_bisection_iter):
-        mid = (new_upper + new_lower) / 2.
-        inverse_mid = func(mid, *args)
+    for _ in range(num_bisection_iter):
+        midpoint = (upper + lower) / 2.
+        midpoint_value = func(midpoint, *args)
+        move_lower = midpoint_value < target_arg
+        lower = torch.where(move_lower, midpoint, lower)
+        upper = torch.where(move_lower, upper, midpoint)
 
-        right_part = (inverse_mid < target_arg).to(target_arg.dtype)
-        left_part = 1. - right_part
+    prev = (upper + lower) / 2.
+    active = torch.ones_like(target_arg, dtype=torch.bool)
 
-        correct_part = close(inverse_mid, target_arg, rtol=1e-6, atol=0).to(target_arg.dtype)
+    finfo = torch.finfo(target_arg.dtype)
+    effective_tolerance = max(float(newton_tolerance), 10.0 * float(finfo.eps))
+    derivative_floor = 10.0 * float(finfo.tiny)
 
-        new_lower = (1. - correct_part) * (right_part * mid + left_part * new_lower) + correct_part * mid
-        new_upper = (1. - correct_part) * (right_part * new_upper + left_part * mid) + correct_part * mid
-
-    prev = mid
-
-    # Changes to the Newton iterations for compile:
-    # 1. Keep the full batch each iteration, using torch.where to only update where
-    #    non-converged (used to slice the batch in 'prev[above_tolerance_mask, :]')
-    # 2. Removed the early exiting when converging so full number of iterations are completed
-    active_row = torch.ones(target_arg.shape[0], dtype=torch.bool, device=target_arg.device)
-    for i in range(num_newton_iter):
+    for _ in range(num_newton_iter):
         fn_result, f_prime_eval = joint_func(prev, *args)
-
         f_eval = fn_result - target_arg
-        update = f_eval / f_prime_eval
 
-        newsource = prev - update
-        prev = torch.where(active_row.unsqueeze(-1), newsource, prev)
+        finite_result = torch.isfinite(fn_result)
+        finite_residual = torch.isfinite(f_eval)
+        valid_derivative = torch.isfinite(f_prime_eval) & (torch.abs(f_prime_eval) > derivative_floor)
 
-        still_active = torch.abs(update).sum(dim=1) >= newton_tolerance
-        active_row = active_row & still_active
+        update_bracket = active & finite_result
+        move_lower = fn_result < target_arg
+        lower = torch.where(update_bracket & move_lower, prev, lower)
+        upper = torch.where(update_bracket & ~move_lower, prev, upper)
+        midpoint = (upper + lower) / 2.
+
+        safe_residual = torch.where(finite_residual, f_eval, torch.zeros_like(f_eval))
+        safe_derivative = torch.where(valid_derivative, f_prime_eval, torch.ones_like(f_prime_eval))
+        newton_candidate = prev - safe_residual / safe_derivative
+
+        valid_candidate = (
+            finite_residual
+            & valid_derivative
+            & torch.isfinite(newton_candidate)
+            & (newton_candidate >= lower)
+            & (newton_candidate <= upper)
+        )
+        candidate = torch.where(valid_candidate, newton_candidate, midpoint)
+
+        step = torch.abs(candidate - prev)
+        converged = finite_residual & (
+            (torch.abs(f_eval) <= effective_tolerance)
+            | (step <= effective_tolerance)
+        )
+
+        prev = torch.where(active, candidate, prev)
+        active = active & ~converged
 
     return prev
 
@@ -107,7 +125,6 @@ def inverse_bisection_n_newton(func,
     """
     new_upper = torch.tensor(max_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
     new_lower = torch.tensor(min_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
-    
     mid=0
     for i in range(num_bisection_iter):
         mid = (new_upper + new_lower) / 2.

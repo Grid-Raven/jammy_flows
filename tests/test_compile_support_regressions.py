@@ -1,6 +1,7 @@
 import os
 import sys
 
+import pytest
 import torch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -8,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import jammy_flows.main.default as f
 from jammy_flows.layers import bisection_n_newton
 from jammy_flows.layers.spline_fns import rational_quadratic_spline
+from jammy_flows.rng_fns import draw_standard_normal
 
 
 def _extreme_valid_spline_params(dtype=torch.float64):
@@ -35,7 +37,7 @@ def _eval_extreme_valid_spline(x):
 
 
 def test_rational_quadratic_spline_logdet_matches_finite_difference_for_tiny_valid_derivative():
-    """checks the inverse-function-theorem identity logdet == log|dy/dx| with a centered finite difference, plus logdet < -8."""
+    """Checks logdet against a centered finite-difference derivative."""
     x = torch.tensor([[1e-7]], dtype=torch.float64)
     eps = torch.tensor(1e-8, dtype=torch.float64)
 
@@ -78,11 +80,15 @@ def test_rational_quadratic_spline_forward_inverse_logdet_cancel_for_interior_po
     )
 
     torch.testing.assert_close(x_roundtrip, x, rtol=1e-7, atol=1e-9)
-    torch.testing.assert_close(forward_logdet + inverse_logdet, torch.zeros_like(forward_logdet), rtol=1e-7, atol=1e-9)
+    torch.testing.assert_close(
+        forward_logdet + inverse_logdet,
+        torch.zeros_like(forward_logdet),
+        rtol=1e-7,
+        atol=1e-9,
+    )
 
 
 def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints():
-    """checks that the embedding axes of the S1 manifold roundtrip correctly without moving the valid endpoints."""
     flow = f.pdf("s1", "y")
     flow.double()
 
@@ -111,7 +117,6 @@ def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints():
 
 
 def test_seeded_sampling_does_not_mutate_global_torch_rng_state():
-    """checks that we're not mixing different randomness sources in unintended ways"""
     flow = f.pdf("e1", "x")
     flow.double()
 
@@ -126,7 +131,6 @@ def test_seeded_sampling_does_not_mutate_global_torch_rng_state():
 
 
 def test_obtain_flow_param_structure_seed_does_not_mutate_global_torch_rng_state():
-    """checks that we're not mixing different randomness sources in unintended ways"""
     flow = f.pdf("e1", "x")
     flow.double()
 
@@ -138,6 +142,23 @@ def test_obtain_flow_param_structure_seed_does_not_mutate_global_torch_rng_state
     actual_next = torch.rand(8)
 
     torch.testing.assert_close(actual_next, expected_next, rtol=0.0, atol=0.0)
+
+
+def test_seeded_standard_normal_compiles_fullgraph():
+    if not hasattr(torch, "compile") or not hasattr(getattr(torch, "library", None), "custom_op"):
+        pytest.skip("fullgraph custom-op support is unavailable in this PyTorch version")
+
+    def generate():
+        return draw_standard_normal(
+            8,
+            3,
+            torch.float32,
+            torch.device("cpu"),
+            seed=123,
+        )
+
+    compiled = torch.compile(generate, fullgraph=True)
+    torch.testing.assert_close(compiled(), generate(), rtol=0.0, atol=0.0)
 
 
 def test_joint_bisection_newton_inverse_solves_batched_monotonic_equation():
@@ -166,3 +187,27 @@ def test_joint_bisection_newton_inverse_solves_batched_monotonic_equation():
     assert torch.isfinite(z_hat).all()
     torch.testing.assert_close(func(z_hat, scale), target, rtol=1e-7, atol=1e-9)
     torch.testing.assert_close(z_hat, z_true, rtol=1e-7, atol=1e-9)
+
+
+def test_joint_bisection_newton_falls_back_when_newton_step_leaves_bracket():
+    def func(z):
+        return z.pow(3)
+
+    def joint_func(z):
+        return z.pow(3), 3.0 * z.pow(2)
+
+    target = torch.tensor([[0.0], [0.125], [8.0]], dtype=torch.float32)
+    expected = torch.tensor([[0.0], [0.5], [2.0]], dtype=torch.float32)
+
+    result = bisection_n_newton.inverse_bisection_n_newton_joint_func_and_grad(
+        func,
+        joint_func,
+        target,
+        min_boundary=-3.0,
+        max_boundary=3.0,
+        num_bisection_iter=20,
+        num_newton_iter=20,
+    )
+
+    assert torch.isfinite(result).all()
+    torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)

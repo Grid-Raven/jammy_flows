@@ -17,8 +17,7 @@ def inverse_bisection_n_newton_joint_func_and_grad(
     Normal finite Newton iterations intentionally retain the legacy arithmetic,
     initialization point, row-level convergence mask, and autograd path. A
     bisection fallback is used only when a Newton candidate is non-finite,
-    excessively large relative to the current bracket, or cannot move despite
-    a material residual.
+    fails to improve a material residual, or cannot move despite one.
     """
     del verbose
 
@@ -96,14 +95,25 @@ def inverse_bisection_n_newton_joint_func_and_grad(
         upper = torch.where(finite_value & ~move_lower, prev, upper)
         fallback = (lower + upper) / 2.0
 
+        finite_candidate = torch.isfinite(newton_candidate)
+        safe_candidate = torch.where(
+            finite_candidate,
+            newton_candidate,
+            fallback,
+        )
+        candidate_value = func(safe_candidate, *args)
+        candidate_residual = candidate_value - target_arg
+
         candidate_moved = newton_candidate != prev
         material_residual = torch.abs(residual) > residual_tolerance
-        bracket_width = torch.abs(upper - lower)
-        excessive_step = torch.abs(update) > 2.0 * bracket_width
+        improves_residual = (
+            torch.isfinite(candidate_residual)
+            & (torch.abs(candidate_residual) < torch.abs(residual))
+        )
         unsafe = active & (
-            ~torch.isfinite(newton_candidate)
+            ~finite_candidate
             | ~valid_derivative
-            | excessive_step
+            | (~improves_residual & material_residual)
             | (~candidate_moved & material_residual)
         )
 

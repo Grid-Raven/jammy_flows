@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - assistant-export-pr5
+  pull_request:
 
 permissions:
   contents: read

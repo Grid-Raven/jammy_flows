@@ -14,6 +14,42 @@ from jammy_flows.rng_fns import (
 )
 
 
+@pytest.mark.parametrize(
+    "dtype, atol",
+    [
+        (torch.float64, 1e-10),
+        (torch.float32, 1e-6),
+        (torch.float16, 2e-3),
+    ],
+)
+def test_s1_embedding_axes_roundtrip_without_moving_valid_endpoints(dtype, atol):
+    flow = f.pdf("s1", "y")
+    flow.to(dtype=dtype)
+
+    embedding_points = torch.tensor(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [-1.0, 0.0],
+            [0.0, -1.0],
+        ],
+        dtype=dtype,
+    )
+
+    intrinsic, _ = flow.transform_target_space(
+        embedding_points,
+        transform_from="embedding",
+        transform_to="intrinsic",
+    )
+    roundtrip, _ = flow.transform_target_space(
+        intrinsic,
+        transform_from="intrinsic",
+        transform_to="embedding",
+    )
+
+    torch.testing.assert_close(roundtrip, embedding_points, rtol=0.0, atol=atol)
+
+
 def test_seeded_sampling_does_not_mutate_global_torch_rng_state():
     flow = f.pdf("e1", "x")
     flow.double()

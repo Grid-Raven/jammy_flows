@@ -38,7 +38,7 @@ def test_searchsorted_does_not_mutate_bin_locations():
     searchsorted(bin_locations, torch.tensor([[0.25]], dtype=torch.float64))
     searchsorted(bin_locations, torch.tensor([[0.75]], dtype=torch.float64))
 
-    torch.testing.assert_close(bin_locations, original, rtol=0.0, atol=0.0)
+    torch.testing.assert_allclose(bin_locations, original, rtol=0.0, atol=0.0)
 
 
 def test_rational_quadratic_spline_logdet_matches_finite_difference_for_tiny_valid_derivative():
@@ -53,7 +53,7 @@ def test_rational_quadratic_spline_logdet_matches_finite_difference_for_tiny_val
     assert torch.isfinite(logdet).all()
     assert torch.isfinite(finite_difference_derivative).all()
     assert logdet.item() < -8.0
-    torch.testing.assert_close(
+    torch.testing.assert_allclose(
         logdet.exp(),
         finite_difference_derivative.abs(),
         rtol=1e-4,
@@ -86,8 +86,8 @@ def test_rational_quadratic_spline_forward_inverse_logdet_cancel_for_interior_po
         inverse=True,
     )
 
-    torch.testing.assert_close(x_roundtrip, x, rtol=1e-7, atol=1e-9)
-    torch.testing.assert_close(
+    torch.testing.assert_allclose(x_roundtrip, x, rtol=1e-7, atol=1e-9)
+    torch.testing.assert_allclose(
         forward_logdet + inverse_logdet,
         torch.zeros_like(forward_logdet),
         rtol=1e-7,
@@ -147,8 +147,8 @@ def test_linear_extension_tail_values_and_gradients_are_finite():
     assert torch.isfinite(recovered).all()
     assert torch.isfinite(inverse_logdet).all()
     assert torch.isfinite(inverse_inputs.grad).all()
-    torch.testing.assert_close(recovered, inputs.detach(), rtol=2e-4, atol=2e-4)
-    torch.testing.assert_close(
+    torch.testing.assert_allclose(recovered, inputs.detach(), rtol=2e-4, atol=2e-4)
+    torch.testing.assert_allclose(
         forward_logdet.detach() + inverse_logdet.detach(),
         torch.zeros_like(forward_logdet),
         rtol=2e-4,

@@ -386,8 +386,11 @@ class Test(unittest.TestCase):
                         ## only test single sub pdf flows with float32
                         continue
 
-                    ### v requires double precision
-                    if("v" in init[0][1]):
+                    ### n and v S2 flows require double precision
+                    if(
+                        init[0][0] == "s2"
+                        and any(flow_type in init[0][1] for flow_type in ("n", "v"))
+                    ):
                         continue
 
                     
@@ -401,10 +404,6 @@ class Test(unittest.TestCase):
                         ## exponential map flows get a little less strict tolerance check for now
                         
                         tolerance=1e-2
-
-                    ### n requires double precision
-                    if("n" in init[0][1]):
-                        tolerance=1.1
 
                     
                     this_flow.float()

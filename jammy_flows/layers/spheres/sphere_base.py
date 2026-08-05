@@ -194,11 +194,12 @@ class sphere_base(layer_base.layer_base):
 
                     # last one is 0 to 2pi
                     # new_angle=torch.acos(x[:,ind:ind+1]/torch.sum(x[:,ind:]**2, dim=1, keepdims=True).sqrt())
-                    sq = torch.sum(x[:, ind:] ** 2, dim=1, keepdims=True)
-                    denom = torch.sqrt(torch.clamp(sq, min=1e-8))
-                    arg = x[:, ind:ind+1] / denom
-                    arg = torch.clamp(arg, -1.0, 1.0)
-                    new_angle = torch.acos(arg)
+                    # Use a finite-gradient norm, but restore exact zero so the
+                    # valid S1 embedding axes do not move in low precision.
+                    rest_sq = torch.sum(x[:, ind+1:] ** 2, dim=1, keepdims=True)
+                    safe_rest_norm = torch.sqrt(rest_sq + torch.finfo(x.dtype).tiny)
+                    rest_norm = torch.where(rest_sq == 0, torch.zeros_like(rest_sq), safe_rest_norm)
+                    new_angle = torch.atan2(rest_norm, x[:, ind:ind+1])
 
                     #mask_smaller=(x[:,ind+1:ind+2]<0).double()
                     new_angle=torch.where(x[:,ind+1:ind+2]<0, 2*numpy.pi-new_angle, new_angle)

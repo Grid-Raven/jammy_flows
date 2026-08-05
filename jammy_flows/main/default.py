@@ -4,6 +4,7 @@ from torch import nn
 from ..flow_options import check_flow_option, obtain_default_options, obtain_overall_flow_info
 from ..extra_functions import list_from_str, NONLINEARITIES, recheck_sampling, find_init_pars_of_chained_blocks
 from ..amortizable_mlp import AmortizableMLP
+from ..rng_fns import draw_standard_normal
 from ..helper_fns import contours, grid_functions
 from ..helper_fns.coverage import calculate_approximate_coverage
 from ..helper_fns.plotting.spherical import get_multiresolution_evals
@@ -899,8 +900,6 @@ class pdf(nn.Module):
         extra_conditional_input=[]
         base_targets=[]
 
-        individual_logps=dict()
-
         extra_params = None
 
         if(amortization_parameters is not None):
@@ -992,31 +991,10 @@ class pdf(nn.Module):
                             - layer.total_param_num : -extra_param_counter,
                         ]
 
-                
-                if(l==(len(pdf_layers)-1)):
-                    # force embedding or intrinsic coordinates in the layer that defines the target dimension
-                    this_target, log_det = layer.inv_flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
-                else:
+                this_target, log_det = layer.inv_flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
 
-                    this_target, log_det = layer.inv_flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
-                
                 extra_param_counter += layer.total_param_num
 
-            if(False):
-                ## stems from debugging purposes, not used currently
-                ind_base_eval=this_logp = torch.distributions.MultivariateNormal(
-                    torch.zeros_like(this_target).to(x),
-                    covariance_matrix=torch.eye(this_target.shape[1]).type_as(x).to(x),
-                ).log_prob(this_target)
-
-                ind_logdet=log_det
-                
-
-                individual_logps["%.2d_%s" % (pdf_index, this_pdf_type)]=ind_base_eval+ind_logdet
-                individual_logps["%.2d_%s_logdet" % (pdf_index, this_pdf_type)]=ind_logdet
-                individual_logps["%.2d_%s_base" % (pdf_index, this_pdf_type)]=ind_base_eval
-
-            
             base_targets.append(this_target)
 
             prev_target=x[:,self.target_dim_indices[pdf_index][0]:self.target_dim_indices[pdf_index][1]]
@@ -1173,13 +1151,9 @@ class pdf(nn.Module):
 
         else:
 
-            if(seed is not None):
-                numpy.random.seed(seed)
-
-            std_normal = numpy.random.normal(size=(used_sample_size, self.total_base_dim))
-
-            std_normal_samples = (
-                torch.from_numpy(std_normal).type(data_type).to(used_device)
+            std_normal_samples = draw_standard_normal(
+                used_sample_size, self.total_base_dim,
+                data_type, used_device, seed=seed,
             )
             log_gauss_evals = torch.distributions.MultivariateNormal(
                 torch.zeros(self.total_base_dim).type(data_type).to(used_device),
@@ -1454,11 +1428,8 @@ class pdf(nn.Module):
                     
                     this_extra_params = extra_params[:, extra_param_counter : extra_param_counter + layer.total_param_num]
               
-                if(l==(len(pdf_layers)-1)):
-                    this_target, log_det = layer.flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
-                else:
-                    this_target, log_det = layer.flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
-                
+                this_target, log_det = layer.flow_mapping([this_target, log_det], extra_inputs=this_extra_params)
+
                 extra_param_counter += layer.total_param_num
 
             new_targets.append(this_target)
@@ -1469,9 +1440,6 @@ class pdf(nn.Module):
 
             extra_conditional_input.append(prev_target)
 
-        if (torch.isfinite(x) == 0).sum() > 0:
-            raise Exception("nonfinite samples generated .. this should never happen!")
-        
         x=torch.cat(new_targets, dim=1)
 
         ## transform to desired output space 
@@ -1613,13 +1581,9 @@ class pdf(nn.Module):
 
         else:
 
-            if(seed is not None):
-                numpy.random.seed(seed)
-
-            std_normal = numpy.random.normal(size=(used_sample_size, self.total_base_dim))
-
-            std_normal_samples = (
-                torch.from_numpy(std_normal).type(data_type).to(used_device)
+            std_normal_samples = draw_standard_normal(
+                used_sample_size, self.total_base_dim,
+                data_type, used_device, seed=seed,
             )
 
             log_gauss_evals=torch.distributions.Normal(0.0,1.0).log_prob(std_normal_samples).sum(dim=-1)

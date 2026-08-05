@@ -19,7 +19,7 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
                                                    newton_tolerance=1e-14, 
                                                    verbose=0):
     """
-    Performs bisection and Newton iterations simulataneously in each 1-d subdimension in a given batch.
+    Performs bisection and Newton iterations simulataneously in each 1-d subdimension in each batch.
 
     Parameters:
 
@@ -38,89 +38,59 @@ def inverse_bisection_n_newton_joint_func_and_grad(func,
             The inverse of the function *func* in each sub-dimension in each batch item.
 
     """
-    new_upper = torch.tensor(max_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
-    new_lower = torch.tensor(min_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
- 
-    mid=0
-    for i in range(num_bisection_iter):
-        mid = (new_upper + new_lower) / 2.
-        #print("mid: ", mid)
-        inverse_mid = func(mid, *args)
+    lower = torch.full_like(target_arg, min_boundary)
+    upper = torch.full_like(target_arg, max_boundary)
 
-        #print("MID", mid)
-        
-        right_part = (inverse_mid < target_arg).type(target_arg.dtype)
-        left_part = 1. - right_part
+    for _ in range(num_bisection_iter):
+        midpoint = (upper + lower) / 2.
+        midpoint_value = func(midpoint, *args)
+        move_lower = midpoint_value < target_arg
+        lower = torch.where(move_lower, midpoint, lower)
+        upper = torch.where(move_lower, upper, midpoint)
 
-        correct_part = (close(inverse_mid, target_arg, rtol=1e-6, atol=0)).type(target_arg.dtype)
+    prev = (upper + lower) / 2.
+    active = torch.ones_like(target_arg, dtype=torch.bool)
 
-        new_lower = (1. - correct_part) * (right_part * mid + left_part * new_lower) + correct_part * mid
-        new_upper = (1. - correct_part) * (right_part * new_upper + left_part * mid) + correct_part * mid
-      
-        
-    prev=mid
+    finfo = torch.finfo(target_arg.dtype)
+    effective_tolerance = max(float(newton_tolerance), 10.0 * float(finfo.eps))
+    derivative_floor = 10.0 * float(finfo.tiny)
 
-    #print("target arg", target_arg.shape)
+    for _ in range(num_newton_iter):
+        fn_result, f_prime_eval = joint_func(prev, *args)
+        f_eval = fn_result - target_arg
 
+        finite_result = torch.isfinite(fn_result)
+        finite_residual = torch.isfinite(f_eval)
+        valid_derivative = torch.isfinite(f_prime_eval) & (torch.abs(f_prime_eval) > derivative_floor)
 
-    above_tolerance_mask=torch.ones( target_arg.shape[0], dtype=torch.bool, device=target_arg.device)
+        update_bracket = active & finite_result
+        move_lower = fn_result < target_arg
+        lower = torch.where(update_bracket & move_lower, prev, lower)
+        upper = torch.where(update_bracket & ~move_lower, prev, upper)
+        midpoint = (upper + lower) / 2.
 
-    ## check where we want to broadcast the masking, and wnhere not
+        safe_residual = torch.where(finite_residual, f_eval, torch.zeros_like(f_eval))
+        safe_derivative = torch.where(valid_derivative, f_prime_eval, torch.ones_like(f_prime_eval))
+        newton_candidate = prev - safe_residual / safe_derivative
 
-    broadcasting_bool_args=[True if (prev.shape[0]>1 and arg.shape[0]>1) else False for arg in args ]
+        valid_candidate = (
+            finite_residual
+            & valid_derivative
+            & torch.isfinite(newton_candidate)
+            & (newton_candidate >= lower)
+            & (newton_candidate <= upper)
+        )
+        candidate = torch.where(valid_candidate, newton_candidate, midpoint)
 
-    for i in range(num_newton_iter):
-       
-        fn_result, f_prime_eval = joint_func(prev[above_tolerance_mask,:], *[a[above_tolerance_mask] if(broadcasting_bool_args[arg_index] == True) else a for arg_index, a in enumerate(args)])
-        
-        f_eval=fn_result-target_arg[above_tolerance_mask,:]
+        step = torch.abs(candidate - prev)
+        converged = finite_residual & (
+            (torch.abs(f_eval) <= effective_tolerance)
+            | (step <= effective_tolerance)
+        )
 
-        update=(f_eval/f_prime_eval)
+        prev = torch.where(active, candidate, prev)
+        active = active & ~converged
 
-        newsource=prev[above_tolerance_mask,:]-update
-
-        prev=torch.masked_scatter(input=prev, mask=above_tolerance_mask[:,None], source=newsource)
-
-        non_finite_sum=(torch.isfinite(prev)==False).sum()
-        if(non_finite_sum>0):
-
-
-            print("NONZERO")
-            print((torch.isfinite(prev)==False).nonzero())
-
-
-            print("prev", prev[torch.isfinite(prev)==False])
-            print("feval ", f_eval[torch.isfinite(prev)==False])
-            print("f grad eval ", f_prime_eval[torch.isfinite(prev)==False])
-
-            raise Exception()
-
-        new_tolerance_mask=(torch.abs(update).sum(axis=1))>=newton_tolerance
-    
-        above_tolerance_mask=torch.masked_scatter(input=above_tolerance_mask, mask=above_tolerance_mask, source=new_tolerance_mask)
-
-        above_tol=above_tolerance_mask.sum()
-
-        if(verbose):
-            print("-- newton iter %d .. %d / %d dims completed" % (i, target_arg.shape[0]-above_tol, target_arg.shape[0]))
-        if(above_tol==0):
-            if(verbose):
-                print("------ done")
-            break
-
-    if(target_arg.dtype==torch.float64):
-
-        target_prec=1e-7
-    else:
-
-        target_prec=1e-4
-
-    num_non_converged=(torch.abs(f_eval)>target_prec).sum()
-    
-    if( num_non_converged>0):
-        print(num_non_converged, " items did not converge in Newton iterations")
-        print("feval (diff) ",f_eval[torch.abs(f_eval)>target_prec])
-    
     return prev
 
 def inverse_bisection_n_newton(func, 
@@ -155,7 +125,6 @@ def inverse_bisection_n_newton(func,
     """
     new_upper = torch.tensor(max_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
     new_lower = torch.tensor(min_boundary).type(target_arg.dtype).repeat(*target_arg.shape).to(target_arg.device)
-    
     mid=0
     for i in range(num_bisection_iter):
         mid = (new_upper + new_lower) / 2.

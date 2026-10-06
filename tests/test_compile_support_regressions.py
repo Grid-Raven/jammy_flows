@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import jammy_flows.main.default as f
 from jammy_flows.layers import bisection_n_newton
 from jammy_flows.layers.euclidean.gaussianization_flow import gf_block
+from jammy_flows.layers.euclidean.gaussianization_flow_old import gf_block_old
 from jammy_flows.rng_fns import (
     _seeded_standard_normal_impl,
     draw_standard_normal,
@@ -244,7 +245,7 @@ def test_partly_precise_log_derivative_is_finite_around_midpoint():
     )
 
     assert torch.isfinite(result).all()
-    torch.testing.assert_close(result, expected, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(result, expected.to(result.dtype), rtol=1e-6, atol=1e-6)
     result.sum().backward()
     assert torch.isfinite(cdf.grad).all()
 
@@ -265,6 +266,60 @@ def test_partly_precise_log_derivative_compiles_fullgraph():
     result = compiled(torch.log(cdf), torch.log1p(-cdf), log_pdf)
 
     assert torch.isfinite(result).all()
+
+
+def test_legacy_partly_precise_log_derivative_is_finite_around_midpoint():
+    layer = gf_block_old(
+        1,
+        num_kde=1,
+        num_householder_iter=0,
+        fit_normalization=0,
+        inverse_function_type="inormal_partly_precise",
+        width_smooth_saturation=0,
+    )
+    target_cdf = torch.tensor([[0.49991855]], dtype=torch.float32)
+    x = torch.logit(target_cdf) * 1.01
+    datapoints = torch.zeros((1, 1, 1), dtype=torch.float32)
+    log_widths = torch.zeros((1, 1, 1), dtype=torch.float32)
+    log_norms = torch.zeros((1, 1, 1), dtype=torch.float32)
+    skew_exponents = torch.ones((1, 1, 1), dtype=torch.float32)
+    skew_signs = torch.ones((1,), dtype=torch.float32)
+
+    cdf = torch.exp(
+        layer.logistic_kernel_log_cdf(
+            x,
+            datapoints,
+            log_widths,
+            log_norms,
+            skew_exponents,
+            skew_signs,
+        )
+    )
+    log_pdf = layer.logistic_kernel_log_pdf(
+        x,
+        datapoints,
+        log_widths,
+        log_norms,
+        skew_exponents,
+        skew_signs,
+    )
+    result = layer.sigmoid_inv_error_pass_log_derivative(
+        x,
+        datapoints,
+        log_widths,
+        log_norms,
+        skew_exponents,
+        skew_signs,
+    )
+    expected = (
+        torch.log(torch.tensor(2.0 * torch.pi, dtype=cdf.dtype)) / 2.0
+        + torch.erfinv(2.0 * cdf - 1.0).square()
+        + log_pdf
+    )
+
+    assert torch.isfinite(result).all()
+    torch.testing.assert_close(cdf, target_cdf, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(result, expected.to(result.dtype), rtol=1e-6, atol=1e-6)
 
 
 def test_conditional_gaussianization_flow_compiles_with_inductor():

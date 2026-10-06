@@ -653,7 +653,27 @@ class gf_block_old(euclidean_base.euclidean_base):
 
                     a=self.pade_const_a
                     c=2.0/(numpy.pi*a)
-                    ln_fac=log_cdf_l+log_sf_l+numpy.log(4.0)
+                    cdf_interior_mask = (
+                        (cdf_l > self.pade_approximation_bound)
+                        & (cdf_l < 1.0 - self.pade_approximation_bound)
+                    )
+                    safe_tail_cdf = self.pade_approximation_bound / 2.0
+                    pade_cdf = torch.where(
+                        cdf_interior_mask,
+                        torch.full_like(cdf_l, safe_tail_cdf),
+                        cdf_l,
+                    )
+                    pade_log_cdf = torch.where(
+                        cdf_interior_mask,
+                        torch.full_like(log_cdf_l, numpy.log(safe_tail_cdf)),
+                        log_cdf_l,
+                    )
+                    pade_log_sf = torch.where(
+                        cdf_interior_mask,
+                        torch.full_like(log_sf_l, numpy.log1p(-safe_tail_cdf)),
+                        log_sf_l,
+                    )
+                    ln_fac=pade_log_cdf+pade_log_sf+numpy.log(4.0)
 
                     F=ln_fac/2.0+c
 
@@ -667,7 +687,7 @@ class gf_block_old(euclidean_base.euclidean_base):
                     log_total=log_numerator-log_denominator
 
                     
-                    total_factor=log_total-log_sf_l-log_cdf_l
+                    total_factor=log_total-pade_log_sf-pade_log_cdf
 
 
                     ##########
@@ -681,8 +701,8 @@ class gf_block_old(euclidean_base.euclidean_base):
                     total_factor=total_factor.masked_scatter(mask_pos, total_factor[mask_pos]+torch.log((-1.0+2*cdf_l[mask_pos])))
                     """
 
-                    mask_neg=(cdf_l<=0.5).double()
-                    extra_plus_minus_factor=torch.log((1.0-2*cdf_l)*mask_neg+(-1.0+2*cdf_l)*(1-mask_neg))
+                    mask_neg=(pade_cdf<=0.5).double()
+                    extra_plus_minus_factor=torch.log((1.0-2*pade_cdf)*mask_neg+(-1.0+2*pade_cdf)*(1-mask_neg))
 
                     total_factor=total_factor+extra_plus_minus_factor
 

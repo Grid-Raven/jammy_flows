@@ -265,3 +265,46 @@ def test_partly_precise_log_derivative_compiles_fullgraph():
     result = compiled(torch.log(cdf), torch.log1p(-cdf), log_pdf)
 
     assert torch.isfinite(result).all()
+
+
+def test_conditional_gaussianization_flow_compiles_with_inductor():
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile is unavailable")
+
+    torch.manual_seed(0)
+    flow = f.pdf(
+        "s1+e1",
+        "o+ggt",
+        conditional_input_dim=64,
+        amortization_mlp_dims=["64", "64"],
+        options_overwrite={
+            0: {"o": {"num_basis_functions": 10, "add_rotation": 1}},
+            1: {
+                "g": {
+                    "num_kde": 10,
+                    "fit_normalization": 0,
+                    "upper_bound_for_widths": 1.0,
+                    "lower_bound_for_widths": 0.1,
+                }
+            },
+        },
+    ).eval()
+    target = torch.tensor(
+        [[1.7453294, 14.89], [0.1, 5.0]],
+        dtype=torch.float32,
+    )
+    conditional = torch.randn(2, 64, dtype=torch.float32) * 0.1
+
+    with torch.no_grad():
+        eager = flow(target, conditional_input=conditional)
+        compiled = torch.compile(
+            flow.forward,
+            backend="inductor",
+            fullgraph=False,
+            dynamic=True,
+        )
+        actual = compiled(target, conditional_input=conditional)
+
+    for actual_tensor, eager_tensor in zip(actual, eager):
+        assert torch.isfinite(actual_tensor).all()
+        torch.testing.assert_close(actual_tensor, eager_tensor, rtol=1e-5, atol=1e-5)

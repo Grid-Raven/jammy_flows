@@ -229,6 +229,7 @@ def test_partly_precise_log_derivative_is_finite_around_midpoint():
     cdf = torch.tensor(
         [[0.4998], [0.4999], [0.49991855], [0.49998], [0.5], [0.50002], [0.5001], [0.5002]],
         dtype=torch.float32,
+        requires_grad=True,
     )
     log_pdf = torch.zeros_like(cdf)
 
@@ -244,6 +245,8 @@ def test_partly_precise_log_derivative_is_finite_around_midpoint():
 
     assert torch.isfinite(result).all()
     torch.testing.assert_close(result, expected, rtol=1e-6, atol=1e-6)
+    result.sum().backward()
+    assert torch.isfinite(cdf.grad).all()
 
 
 def test_partly_precise_log_derivative_compiles_fullgraph():

@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import jammy_flows.main.default as f
 from jammy_flows.layers import bisection_n_newton
+from jammy_flows.layers.euclidean.gaussianization_flow import gf_block
 from jammy_flows.rng_fns import (
     _seeded_standard_normal_impl,
     draw_standard_normal,
@@ -221,3 +222,43 @@ def test_joint_bisection_newton_falls_back_when_newton_step_leaves_bracket():
 
     assert torch.isfinite(result).all()
     torch.testing.assert_close(result, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_partly_precise_log_derivative_is_finite_around_midpoint():
+    layer = gf_block(1, inverse_function_type="inormal_partly_precise")
+    cdf = torch.tensor(
+        [[0.4998], [0.4999], [0.49991855], [0.49998], [0.5], [0.50002], [0.5001], [0.5002]],
+        dtype=torch.float32,
+    )
+    log_pdf = torch.zeros_like(cdf)
+
+    result = layer.sigmoid_inv_error_pass_log_derivative_given_cdf_sf(
+        torch.log(cdf),
+        torch.log1p(-cdf),
+        log_pdf,
+    )
+    expected = (
+        torch.log(torch.tensor(2.0 * torch.pi, dtype=cdf.dtype)) / 2.0
+        + torch.erfinv(2.0 * cdf - 1.0).square()
+    )
+
+    assert torch.isfinite(result).all()
+    torch.testing.assert_close(result, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_partly_precise_log_derivative_compiles_fullgraph():
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile is unavailable")
+
+    layer = gf_block(1, inverse_function_type="inormal_partly_precise")
+    cdf = torch.tensor([[0.49991855], [0.5001]], dtype=torch.float32)
+    log_pdf = torch.zeros_like(cdf)
+    compiled = torch.compile(
+        layer.sigmoid_inv_error_pass_log_derivative_given_cdf_sf,
+        backend="eager",
+        fullgraph=True,
+    )
+
+    result = compiled(torch.log(cdf), torch.log1p(-cdf), log_pdf)
+
+    assert torch.isfinite(result).all()

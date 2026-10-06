@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import jammy_flows.main.default as f
 from jammy_flows.layers import bisection_n_newton
 from jammy_flows.layers.euclidean.gaussianization_flow import gf_block
+from jammy_flows.layers.euclidean.gaussianization_flow_old import gf_block_old
 from jammy_flows.rng_fns import (
     _seeded_standard_normal_impl,
     draw_standard_normal,
@@ -229,6 +230,7 @@ def test_partly_precise_log_derivative_is_finite_around_midpoint():
     cdf = torch.tensor(
         [[0.4998], [0.4999], [0.49991855], [0.49998], [0.5], [0.50002], [0.5001], [0.5002]],
         dtype=torch.float32,
+        requires_grad=True,
     )
     log_pdf = torch.zeros_like(cdf)
 
@@ -243,7 +245,9 @@ def test_partly_precise_log_derivative_is_finite_around_midpoint():
     )
 
     assert torch.isfinite(result).all()
-    torch.testing.assert_close(result, expected, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(result, expected.to(result.dtype), rtol=1e-6, atol=1e-6)
+    result.sum().backward()
+    assert torch.isfinite(cdf.grad).all()
 
 
 def test_partly_precise_log_derivative_compiles_fullgraph():
@@ -262,3 +266,97 @@ def test_partly_precise_log_derivative_compiles_fullgraph():
     result = compiled(torch.log(cdf), torch.log1p(-cdf), log_pdf)
 
     assert torch.isfinite(result).all()
+
+
+def test_legacy_partly_precise_log_derivative_is_finite_around_midpoint():
+    layer = gf_block_old(
+        1,
+        num_kde=1,
+        num_householder_iter=0,
+        fit_normalization=0,
+        inverse_function_type="inormal_partly_precise",
+        width_smooth_saturation=0,
+    )
+    target_cdf = torch.tensor([[0.49991855]], dtype=torch.float32)
+    x = torch.logit(target_cdf) * 1.01
+    datapoints = torch.zeros((1, 1, 1), dtype=torch.float32)
+    log_widths = torch.zeros((1, 1, 1), dtype=torch.float32)
+    log_norms = torch.zeros((1, 1, 1), dtype=torch.float32)
+    skew_exponents = torch.ones((1, 1, 1), dtype=torch.float32)
+    skew_signs = torch.ones((1,), dtype=torch.float32)
+
+    cdf = torch.exp(
+        layer.logistic_kernel_log_cdf(
+            x,
+            datapoints,
+            log_widths,
+            log_norms,
+            skew_exponents,
+            skew_signs,
+        )
+    )
+    log_pdf = layer.logistic_kernel_log_pdf(
+        x,
+        datapoints,
+        log_widths,
+        log_norms,
+        skew_exponents,
+        skew_signs,
+    )
+    result = layer.sigmoid_inv_error_pass_log_derivative(
+        x,
+        datapoints,
+        log_widths,
+        log_norms,
+        skew_exponents,
+        skew_signs,
+    )
+    expected = (
+        torch.log(torch.tensor(2.0 * torch.pi, dtype=cdf.dtype)) / 2.0
+        + torch.erfinv(2.0 * cdf - 1.0).square()
+        + log_pdf
+    )
+
+    assert torch.isfinite(result).all()
+    torch.testing.assert_close(cdf, target_cdf, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(result, expected.to(result.dtype), rtol=1e-6, atol=1e-6)
+
+
+def test_conditional_gaussianization_flow_compiles_with_inductor():
+    if not hasattr(torch, "compile"):
+        pytest.skip("torch.compile is unavailable")
+
+    torch.manual_seed(0)
+    flow = f.pdf(
+        "e1",
+        "ggt",
+        conditional_input_dim=64,
+        amortization_mlp_dims=["64"],
+        options_overwrite={
+            "g": {
+                "num_kde": 10,
+                "fit_normalization": 0,
+                "upper_bound_for_widths": 1.0,
+                "lower_bound_for_widths": 0.1,
+            }
+        },
+    ).eval()
+    target = torch.tensor(
+        [[14.89], [5.0]],
+        dtype=torch.float32,
+    )
+    conditional = torch.randn(2, 64, dtype=torch.float32) * 0.1
+
+    with torch.no_grad():
+        eager = flow(target, conditional_input=conditional)
+        compiled = torch.compile(
+            flow.forward,
+            backend="inductor",
+            fullgraph=True,
+            dynamic=True,
+        )
+        actual = compiled(target, conditional_input=conditional)
+
+    for actual_tensor, eager_tensor in zip(actual, eager):
+        assert torch.isfinite(actual_tensor).all()
+        torch.testing.assert_close(actual_tensor, eager_tensor, rtol=1e-5, atol=1e-5)

@@ -390,8 +390,7 @@ class sphere_base(layer_base.layer_base):
             if(x.dtype==torch.float32):
                 used_eps=1e-5
             ## make sure we dont get any infs
-            new_x=torch.where(new_x<=0.0, used_eps, new_x)
-            new_x=torch.where(new_x>=2*numpy.pi, 2*numpy.pi-used_eps, new_x)
+            new_x=torch.clamp(new_x, used_eps, 2*numpy.pi-used_eps)
 
             ## based on -pi-pi
             #sign=(x<0)*-1.0+(x>=0)*1.0

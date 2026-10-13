@@ -456,6 +456,10 @@ class gf_block(euclidean_base.euclidean_base):
     def compute_householder_matrix(self, vs):
 
         Q = torch.eye(self.dimension, device=vs.device).type(vs.dtype).unsqueeze(0).repeat(vs.shape[0], 1,1)
+
+        if(self.dimension==1):
+            ## a 1-d reflection is -1 for any v and normalizing v can give 0/0; the zero term keeps vs in the graph
+            return Q*(-1)**self.householder_iter + 0.0*vs.sum(dim=1, keepdim=True)
        
         for i in range(self.householder_iter):
         
